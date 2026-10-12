@@ -209,6 +209,15 @@ describe("envelopedLimit and fitWithMeter's json unit — a context sent inside 
 		assert.match(carried, /_context injected: cut_\n$/);
 	});
 
+	test("a body that fits the limit raw but not encoded is cut, not passed whole", () => {
+		const limit = envelopedLimit("SessionStart");
+		// Every character a quote: raw it is under the limit, encoded about twice it.
+		const body = '"'.repeat(limit.max - 200);
+		const context = fitWithMeter(body, meter, limit);
+		assert.ok(JSON.stringify(context).length <= limit.max, `encoded ${JSON.stringify(context).length} of ${limit.max}`);
+		assert.match(context, /_context injected: cut_\n$/, "the cut is in the meter");
+	});
+
 	test("the json cut never splits an emoji", () => {
 		const body = "😀".repeat(6_000);
 		const context = fitWithMeter(body, meter, envelopedLimit("SessionStart"));
