@@ -7,7 +7,7 @@
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { debug, fitEncoded, HOOK_OUTPUT_MAX_CHARS, warn, writeHookOutput, writeStopFeedback, writeSystemMessage, type PolicyResult } from "../lib/hook-io.ts";
+import { debug, envelopedLimit, fitEncoded, fitWithMeter, HOOK_OUTPUT_MAX_CHARS, warn, writeHookOutput, writeStopFeedback, writeSystemMessage, type PolicyResult } from "../lib/hook-io.ts";
 
 /**
  * Replace process.stderr.write with a capturer that records calls and returns
@@ -191,6 +191,35 @@ describe("writeHookOutput — additionalContext fits the hook output cap (#254)"
 	test("a short context is written unchanged", () => {
 		const out = captureStdout(() => writeHookOutput("PostToolUse", "hello"));
 		assert.equal(out, '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"hello"}}');
+	});
+});
+
+describe("envelopedLimit and fitWithMeter's json unit — a context sent inside the envelope (#340)", () => {
+	const meter = (cut: boolean) => (cut ? "_context injected: cut_" : "_context injected_");
+
+	test("a context fitted to the SessionStart limit stays within the cap once enveloped, meter last", () => {
+		// Newlines and quotes escape to two characters each: an ASCII body that
+		// fits the cap raw is over it once encoded, which a raw count would miss.
+		const body = Array.from({ length: 2_000 }, (_, i) => `- "item" ${i}\n`).join("");
+		const context = fitWithMeter(body, meter, envelopedLimit("SessionStart"));
+		const out = captureStdout(() => writeHookOutput("SessionStart", context));
+		assert.ok(out.length <= HOOK_OUTPUT_MAX_CHARS, `stdout is ${out.length} characters`);
+		const carried = (JSON.parse(out) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
+		assert.equal(carried, context, "writeHookOutput did not cut it again");
+		assert.match(carried, /_context injected: cut_\n$/);
+	});
+
+	test("the json cut never splits an emoji", () => {
+		const body = "😀".repeat(6_000);
+		const context = fitWithMeter(body, meter, envelopedLimit("SessionStart"));
+		assert.doesNotMatch(context, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/, "a lone high surrogate");
+		assert.ok(JSON.stringify(context).length <= envelopedLimit("SessionStart").max);
+	});
+
+	test("CRLF bodies are measured as encoded, carriage returns included", () => {
+		const body = "line\r\n".repeat(3_000);
+		const context = fitWithMeter(body, meter, envelopedLimit("SessionStart"));
+		assert.ok(JSON.stringify(context).length <= envelopedLimit("SessionStart").max);
 	});
 });
 

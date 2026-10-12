@@ -50,6 +50,26 @@ export type RunResult = {
 	readonly code: number;
 };
 
+/**
+ * The context a SessionStart hook-path run carried: its stdout is one JSON
+ * envelope, `{ hookSpecificOutput: { hookEventName: "SessionStart",
+ * additionalContext } }` (#340). Throws on anything else, so a test of the
+ * hook path can never pass on plain text.
+ */
+export function hookContext(stdout: string): string {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stdout);
+	} catch {
+		throw new Error(`session-start's hook-path stdout is not one JSON object: ${JSON.stringify(stdout.slice(0, 120))}`);
+	}
+	const out = (parsed as { hookSpecificOutput?: { hookEventName?: unknown; additionalContext?: unknown } }).hookSpecificOutput;
+	if (out?.hookEventName !== "SessionStart" || typeof out.additionalContext !== "string") {
+		throw new Error(`not a SessionStart envelope: ${JSON.stringify(stdout.slice(0, 120))}`);
+	}
+	return out.additionalContext;
+}
+
 export function runScript(
 	scriptPath: string,
 	stdin: string | object | null,

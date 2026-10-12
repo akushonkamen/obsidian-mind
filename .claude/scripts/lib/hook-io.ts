@@ -117,10 +117,24 @@ export const HOOK_OUTPUT_MAX_CHARS = 9_500;
  * A limit a plain-text output is held under: its size, the unit it is
  * measured in, and its name for the line that marks a cut.
  */
-export type OutputLimit = { readonly max: number; readonly unit: "chars" | "bytes"; readonly name: string };
+export type OutputLimit = { readonly max: number; readonly unit: "chars" | "bytes" | "json"; readonly name: string };
 
 /** Claude Code's hook output cap, counted in UTF-16 units as Claude Code counts characters. */
 export const HOOK_OUTPUT_LIMIT: OutputLimit = { max: HOOK_OUTPUT_MAX_CHARS, unit: "chars", name: "the hook output cap" };
+
+/**
+ * The cap for a context that goes out inside a `hookSpecificOutput` envelope
+ * (writeHookOutput), measured on its JSON-encoded form: what is left of the
+ * hook output cap once the envelope itself is counted. Claude Code caps the
+ * `additionalContext` string alone, but an agent whose cap is undocumented
+ * (Gemini) gets the whole stdout held under it (#340).
+ */
+export function envelopedLimit(hookEventName: string): OutputLimit {
+	const envelope = JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: "" } }).length;
+	// `"json"` sizes count the encoded string's own two quotes; the envelope
+	// above already counted them once.
+	return { max: HOOK_OUTPUT_MAX_CHARS - envelope + 2, unit: "json", name: HOOK_OUTPUT_LIMIT.name };
+}
 
 /** The line that replaces whatever a cut to `limit` removed. */
 export const cutLine = (limit: OutputLimit): string => `… (truncated to fit ${limit.name})`;
@@ -165,12 +179,23 @@ export function fitWithMeter(
 	meter: (cut: boolean, bodyBytes: number) => string,
 	limit: OutputLimit = HOOK_OUTPUT_LIMIT,
 ): string {
-	const size = (text: string) => (limit.unit === "bytes" ? Buffer.byteLength(text, "utf-8") : text.length);
+	const size = (text: string) =>
+		limit.unit === "bytes" ? Buffer.byteLength(text, "utf-8") : limit.unit === "json" ? JSON.stringify(text).length : text.length;
 	// The longest prefix of `text` at most `n` units long, never half a character.
-	const prefix = (text: string, n: number) =>
-		limit.unit === "bytes"
-			? Buffer.from(text, "utf-8").subarray(0, n).toString("utf-8").replace(/\uFFFD+$/, "")
-			: text.slice(0, n).replace(/[\uD800-\uDBFF]$/, "");
+	const prefix = (text: string, n: number) => {
+		if (limit.unit === "bytes") return Buffer.from(text, "utf-8").subarray(0, n).toString("utf-8").replace(/\uFFFD+$/, "");
+		if (limit.unit === "chars") return text.slice(0, n).replace(/[\uD800-\uDBFF]$/, "");
+		// json: the longest prefix whose encoded form fits, the same search as
+		// fitEncoded (a lone surrogate encodes longer than the pair it splits).
+		let lo = 0;
+		let hi = text.length;
+		while (lo < hi) {
+			const mid = Math.ceil((lo + hi) / 2);
+			if (JSON.stringify(text.slice(0, mid)).length <= n) lo = mid;
+			else hi = mid - 1;
+		}
+		return text.slice(0, lo).replace(/[\uD800-\uDBFF]$/, "");
+	};
 	const bodyBytes = Buffer.byteLength(body, "utf-8");
 	const whole = `${body}\n${meter(false, bodyBytes)}\n`;
 	if (size(whole) <= limit.max) return whole;

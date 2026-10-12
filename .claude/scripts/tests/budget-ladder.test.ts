@@ -28,7 +28,7 @@ import {
 	NORTH_STAR_POINTER,
 	type BudgetSection,
 } from "../lib/session-start.ts";
-import { runScript as spawnHook, rmTemp } from "./_helpers.ts";
+import { hookContext, runScript as spawnHook, rmTemp } from "./_helpers.ts";
 
 const bytes = (s: string): number => Buffer.byteLength(s, "utf-8");
 const render = (s: readonly BudgetSection[]): number =>
@@ -250,7 +250,9 @@ describe("session-start — #304's fixture on the hook path", () => {
 			const bullets = Array.from({ length: 30 }, (_, i) => `- [[Project ${i}]] — ${clause}${"More detail on how it is measured and what counts. ".repeat(5)}`);
 			writeFileSync(join(dir, "brain", "North Star.md"), `---\ndescription: d\n---\n# North Star\n\n## Current Focus\n\n${bullets.join("\n")}\n`);
 			writeFileSync(join(dir, "brain", "Gotchas.md"), "---\ndescription: pitfalls\n---\n# G\n");
-			const { stdout, code } = spawnHook(resolve(dirname(fileURLToPath(import.meta.url)), "../session-start.ts"), { source: "startup" }, { CLAUDE_PROJECT_DIR: dir });
+			const run = spawnHook(resolve(dirname(fileURLToPath(import.meta.url)), "../session-start.ts"), { source: "startup" }, { CLAUDE_PROJECT_DIR: dir });
+			const { code } = run;
+			const stdout = hookContext(run.stdout);
 			assert.equal(code, 0);
 			const ns = stdout.slice(stdout.indexOf("### North Star"), stdout.indexOf("\n### ", stdout.indexOf("### North Star") + 5));
 			assert.match(ns, /- Project 0 — move the release build onto tagged artifacts/);
@@ -309,11 +311,13 @@ describe("North Star full level — no silent cut", () => {
 		try {
 			const tasks = Array.from({ length: 14 }, (_, i) => `- [ ] task ${i + 1}`).join("\n");
 			writeFileSync(join(dir, "Tasks.md"), `# Tasks\n\n${tasks}\n`);
-			const { stdout, code } = spawnHook(
+			const run = spawnHook(
 				resolve(dirname(fileURLToPath(import.meta.url)), "../session-start.ts"),
 				{ source: "startup" },
 				{ CLAUDE_PROJECT_DIR: dir },
 			);
+			const { code } = run;
+			const stdout = hookContext(run.stdout);
 			assert.equal(code, 0);
 			const meter = stdout.trim().split("\n").pop() ?? "";
 			assert.match(meter, / — cut: Open Tasks \(10 of 14\)/, meter);

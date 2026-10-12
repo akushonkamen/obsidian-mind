@@ -151,8 +151,9 @@ function renderSections(sections: readonly BudgetSection[]): string {
 export function applyInjectionBudget(
 	sections: readonly BudgetSection[],
 	budgetBytes: number,
+	measure: (text: string) => number = utf8Bytes,
 ): BudgetResult {
-	const size = (s: readonly BudgetSection[]): number => Buffer.byteLength(renderSections(s), "utf-8");
+	const size = (s: readonly BudgetSection[]): number => measure(renderSections(s));
 	const name = (i: number): string => (sections[i]?.header ?? "").replace(/^#+\s*/, "");
 	// A section delivered at full whose body is itself a cut says so.
 	const cutOf = (delivered: readonly BudgetSection[]) =>
@@ -275,6 +276,17 @@ export function parseInjectionBudget(manifestJson: string | null): number | null
 
 /** Room the closing meter line keeps beside the budgeted sections. */
 export const METER_HEADROOM = 400;
+
+/** A text's UTF-8 size: what a budget measures by default. */
+export const utf8Bytes = (text: string): number => Buffer.byteLength(text, "utf-8");
+
+/**
+ * A text's size as it goes out inside a JSON envelope (#340): its UTF-8 bytes
+ * or its JSON-encoded length, whichever is larger. Escaping (`\n`, quotes)
+ * grows ASCII text; multi-byte text is still held to its bytes, so no vault
+ * is measured more loosely than as plain stdout.
+ */
+export const enveloped = (text: string): number => Math.max(utf8Bytes(text), JSON.stringify(text).length);
 
 /**
  * The most the sections may spend. Claude Code caps a hook's plain stdout at
