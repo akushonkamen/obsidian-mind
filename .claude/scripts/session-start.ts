@@ -344,7 +344,7 @@ function northStarSection(priority: number): BudgetSection {
 	if (ladder.headlines.length > 0) {
 		levels.push(
 			{ name: "headlines", body: renderHeadlines(ladder.headlines) },
-			{ name: "top-N", fit: (room, measure) => topHeadlines(ladder.headlines, room, measure) },
+			{ name: "top-N", fit: (fits) => topHeadlines(ladder.headlines, fits) },
 		);
 	}
 	return { header, body: ladder.full, priority, fallback: NORTH_STAR_POINTER, levels };

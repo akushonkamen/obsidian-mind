@@ -88,13 +88,16 @@ describe("applyInjectionBudget — the ladder", () => {
 		assert.deepEqual(overHeadlines.collapsed, ["North Star (current goals)"]);
 	});
 
-	test("a `fit` level is handed exactly the room its body may take", () => {
+	test("a `fit` level's predicate accepts a body that fills the budget exactly, and not one byte more", () => {
 		const fixed: BudgetSection = { header: "", body: "x".repeat(10), priority: 0 };
-		let handed = -1;
-		const s = ns("F".repeat(500), [{ name: "top-N", fit: (room) => ((handed = room), "t".repeat(room)) }]);
+		const longest = (fits: (body: string) => boolean) => {
+			let n = 0;
+			while (fits("t".repeat(n + 1))) n++;
+			return n > 0 ? "t".repeat(n) : null;
+		};
+		const s = ns("F".repeat(500), [{ name: "top-N", fit: longest }]);
 		const r = applyInjectionBudget([fixed, s], 200);
-		assert.equal(r.bytes, 200, "a body of exactly the room handed fills the budget to the byte");
-		assert.equal(handed, 200 - render([fixed, { ...s, body: "" }]));
+		assert.equal(r.bytes, 200, "the longest body the predicate accepts fills the budget to the byte");
 		assert.deepEqual(r.degraded, [{ section: "North Star (current goals)", level: "top-N" }]);
 	});
 
@@ -234,11 +237,11 @@ describe("topHeadlines", () => {
 	const heads = ["one", "two", "three"];
 	test("the first N that fit, and how many more", () => {
 		const two = `${renderHeadlines(["one", "two"])}\n_(+1 more goals in brain/North Star.md)_`;
-		assert.equal(topHeadlines(heads, bytes(two)), two);
-		assert.equal(topHeadlines(heads, bytes(two) - 1), `${renderHeadlines(["one"])}\n_(+2 more goals in brain/North Star.md)_`);
+		assert.equal(topHeadlines(heads, (b) => bytes(b) <= bytes(two)), two);
+		assert.equal(topHeadlines(heads, (b) => bytes(b) <= bytes(two) - 1), `${renderHeadlines(["one"])}\n_(+2 more goals in brain/North Star.md)_`);
 	});
 	test("null when not one fits", () => {
-		assert.equal(topHeadlines(heads, 5), null);
+		assert.equal(topHeadlines(heads, (b) => bytes(b) <= 5), null);
 	});
 });
 
@@ -376,12 +379,38 @@ describe("a fitted rung sizes itself as the budget measures it (#340)", () => {
 			body: headlines.join("\n"),
 			priority: 10,
 			fallback: "(pointer)",
-			levels: [{ name: "top-N", fit: (room, measure) => topHeadlines(headlines, room, measure) }],
+			levels: [{ name: "top-N", fit: (fits) => topHeadlines(headlines, fits) }],
 		};
 		for (const budget of [2_600, 2_800, 3_000]) {
 			const r = applyInjectionBudget([fixed, northStar], budget, enveloped);
 			assert.deepEqual(r.collapsed, [], `budget ${budget}: collapsed`);
 			assert.deepEqual(r.degraded, [{ section: "North Star (current goals)", level: "top-N" }], `budget ${budget}`);
+		}
+	});
+	test("top-N keeps every headline the whole render has room for, whatever the rest of it measures", () => {
+		// enveloped is max(bytes, json) of the WHOLE render, which is not the sum
+		// of its parts: multi-byte text elsewhere pays for this body's escapes.
+		const headlines = Array.from({ length: 60 }, (_, i) => `- goal ${i}`);
+		const fixed: BudgetSection = { header: "### Fixed", body: "語".repeat(700), priority: 1 };
+		const northStar = (body: string): BudgetSection => ({
+			header: "### North Star (current goals)",
+			body,
+			priority: 10,
+			fallback: "(pointer)",
+			levels: [{ name: "top-N", fit: (fits) => topHeadlines(headlines, fits) }],
+		});
+		const full = northStar(headlines.join("\n"));
+		const textOf = (body: string) => `### Fixed\n${fixed.body}\n\n### North Star (current goals)\n${body}`;
+		for (const budget of [2_400, 2_500, 2_600]) {
+			// The most headlines any top-N body could keep inside this budget.
+			let best = 0;
+			for (let n = 1; n < headlines.length; n++) {
+				const body = `${renderHeadlines(headlines.slice(0, n))}\n_(+${headlines.length - n} more goals in brain/North Star.md)_`;
+				if (enveloped(textOf(body)) <= budget) best = n;
+			}
+			assert.ok(best > 0, `budget ${budget} leaves room for at least one`);
+			const r = applyInjectionBudget([fixed, full], budget, enveloped);
+			assert.ok(r.text.includes(`(+${headlines.length - best} more goals`), `budget ${budget}: kept fewer than ${best}`);
 		}
 	});
 });

@@ -102,8 +102,12 @@ export type BudgetSection = {
 export type BudgetLevel = {
 	readonly name: string;
 	readonly body?: string | undefined;
-	/** Fits the body into `maxBytes` as `measure` sizes text: the same measure the budget uses, so a fitted body is never over once judged. */
-	readonly fit?: ((maxBytes: number, measure: (text: string) => number) => string | null) | undefined;
+	/**
+	 * The largest body this level can make that `fits`, or null. `fits` judges
+	 * the whole render with that body in place, by the budget's own measure: a
+	 * part's size does not add up to the whole's under every measure (#340).
+	 */
+	readonly fit?: ((fits: (body: string) => boolean) => string | null) | undefined;
 };
 
 export type BudgetResult = {
@@ -184,21 +188,13 @@ export function applyInjectionBudget(
 	for (const { s, i } of bestFirst) {
 		const rungs: readonly BudgetLevel[] = [{ name: "full", body: s.body }, ...(s.levels ?? [])];
 		for (const rung of rungs) {
-			let body: string | null | undefined = rung.body;
-			if (rung.fit !== undefined) {
-				const empty = [...current];
-				empty[i] = { ...s, body: "" };
-				const room = budgetBytes - size(empty);
-				body = room > 0 ? rung.fit(room, measure) : null;
-			}
-			if (body === null || body === undefined || body === "") continue;
-			const probe = [...current];
-			probe[i] = { ...s, body };
-			if (size(probe) <= budgetBytes) {
-				current = probe;
-				level.set(i, rung.name);
-				break;
-			}
+			const withBody = (body: string) => current.map((c, j) => (j === i ? { ...s, body } : c));
+			const fits = (body: string) => size(withBody(body)) <= budgetBytes;
+			const body = rung.fit !== undefined ? rung.fit(fits) : rung.body;
+			if (body === null || body === undefined || body === "" || !fits(body)) continue;
+			current = withBody(body);
+			level.set(i, rung.name);
+			break;
 		}
 	}
 
@@ -1053,14 +1049,14 @@ export function renderHeadlines(headlines: readonly string[]): string {
 }
 
 /**
- * The first N headlines that fit in `maxBytes` as `measure` sizes them, with a
- * line saying how many more there are. Null when not even one fits, or when
- * all of them do (that is the `headlines` level, not this one).
+ * The first N headlines that `fits` accepts, with a line saying how many
+ * more there are. Null when not even one fits, or when all of them do (that
+ * is the `headlines` level, not this one).
  */
-export function topHeadlines(headlines: readonly string[], maxBytes: number, measure: (text: string) => number = utf8Bytes): string | null {
+export function topHeadlines(headlines: readonly string[], fits: (body: string) => boolean): string | null {
 	for (let n = headlines.length - 1; n >= 1; n--) {
 		const body = `${renderHeadlines(headlines.slice(0, n))}\n_(+${headlines.length - n} more goals in brain/North Star.md)_`;
-		if (measure(body) <= maxBytes) return body;
+		if (fits(body)) return body;
 	}
 	return null;
 }
