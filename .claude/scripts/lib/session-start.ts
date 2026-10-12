@@ -6,7 +6,7 @@
 
 import { basename, join, resolve } from "node:path";
 
-import { HOOK_OUTPUT_MAX_CHARS } from "./hook-io.ts";
+import { envelopedLimit } from "./hook-io.ts";
 import { escapeRegex } from "./regex.ts";
 
 export function take(stdout: string, n: number): string {
@@ -102,7 +102,8 @@ export type BudgetSection = {
 export type BudgetLevel = {
 	readonly name: string;
 	readonly body?: string | undefined;
-	readonly fit?: ((maxBytes: number) => string | null) | undefined;
+	/** Fits the body into `maxBytes` as `measure` sizes text: the same measure the budget uses, so a fitted body is never over once judged. */
+	readonly fit?: ((maxBytes: number, measure: (text: string) => number) => string | null) | undefined;
 };
 
 export type BudgetResult = {
@@ -188,7 +189,7 @@ export function applyInjectionBudget(
 				const empty = [...current];
 				empty[i] = { ...s, body: "" };
 				const room = budgetBytes - size(empty);
-				body = room > 0 ? rung.fit(room) : null;
+				body = room > 0 ? rung.fit(room, measure) : null;
 			}
 			if (body === null || body === undefined || body === "") continue;
 			const probe = [...current];
@@ -209,7 +210,7 @@ export function applyInjectionBudget(
 		.filter(({ i }) => level.get(i) !== "pointer" && level.get(i) !== "full")
 		.map(({ i }) => ({ section: name(i), level: level.get(i) as string }));
 	const text = renderSections(current);
-	return { text, bytes: Buffer.byteLength(text, "utf-8"), collapsed, degraded, cut: cutOf(current) };
+	return { text, bytes: measure(text), collapsed, degraded, cut: cutOf(current) };
 }
 
 /**
@@ -289,15 +290,16 @@ export const utf8Bytes = (text: string): number => Buffer.byteLength(text, "utf-
 export const enveloped = (text: string): number => Math.max(utf8Bytes(text), JSON.stringify(text).length);
 
 /**
- * The most the sections may spend. Claude Code caps a hook's plain stdout at
+ * The most the sections may spend. Claude Code caps a hook's context at
  * 10,000 characters and, over it, injects a file path and the first 2,000
  * characters instead, so a budget above the cap never binds: the session
  * gets a preview and the meter at the end is the first thing lost (#254).
- * HOOK_OUTPUT_MAX_CHARS already keeps a margin under that 10,000. The
- * budget is in bytes, and a string's UTF-8 bytes are never fewer than its
- * characters, so a byte ceiling also holds the character cap.
+ * The hook path sends the context inside a JSON envelope (#340), so the
+ * ceiling is what the envelope leaves of the hook output cap (which already
+ * keeps a margin under that 10,000), less the meter's headroom. The budget
+ * is measured as `enveloped`: never fewer than the encoded characters.
  */
-export const INJECTION_CEILING_BYTES = HOOK_OUTPUT_MAX_CHARS - METER_HEADROOM;
+export const INJECTION_CEILING_BYTES = envelopedLimit("SessionStart").max - METER_HEADROOM;
 
 /** A budget the eager layer is held to, and the configured value when it was clamped. */
 export type InjectionBudget = { readonly bytes: number; readonly clampedFrom?: number };
@@ -1051,14 +1053,14 @@ export function renderHeadlines(headlines: readonly string[]): string {
 }
 
 /**
- * The first N headlines that fit in `maxBytes`, with a line saying how many
- * more there are. Null when not even one fits, or when all of them do (that
- * is the `headlines` level, not this one).
+ * The first N headlines that fit in `maxBytes` as `measure` sizes them, with a
+ * line saying how many more there are. Null when not even one fits, or when
+ * all of them do (that is the `headlines` level, not this one).
  */
-export function topHeadlines(headlines: readonly string[], maxBytes: number): string | null {
+export function topHeadlines(headlines: readonly string[], maxBytes: number, measure: (text: string) => number = utf8Bytes): string | null {
 	for (let n = headlines.length - 1; n >= 1; n--) {
 		const body = `${renderHeadlines(headlines.slice(0, n))}\n_(+${headlines.length - n} more goals in brain/North Star.md)_`;
-		if (Buffer.byteLength(body, "utf-8") <= maxBytes) return body;
+		if (measure(body) <= maxBytes) return body;
 	}
 	return null;
 }

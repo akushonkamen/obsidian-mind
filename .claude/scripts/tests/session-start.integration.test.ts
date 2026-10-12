@@ -35,7 +35,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { HOOK_OUTPUT_MAX_CHARS } from "../lib/hook-io.ts";
-import { METER_HEADROOM } from "../lib/session-start.ts";
+import { INJECTION_CEILING_BYTES, METER_HEADROOM } from "../lib/session-start.ts";
+
+/** The hook-path ceiling as the meter prints it, regex-escaped (derived: the envelope takes its share, #340). */
+const CEILING_KB = (INJECTION_CEILING_BYTES / 1000).toFixed(1).replace(".", "\\.");
 import { hookContext, runScript as spawnHook, rmTemp } from "./_helpers.ts";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -280,7 +283,7 @@ describe("session-start — listing collapse and injection budget", () => {
 	test("no manifest budget → the hook output ceiling is the budget (#254)", () => {
 		const { stdout } = runBig();
 		const last = stdout.split("\n").filter((l) => l.trim() !== "").pop() ?? "";
-		assert.match(last, /^_context injected: \d+\.\dkB \/ 9\.1kB budget(?: — collapsed: [^_]+)?_$/);
+		assert.match(last, new RegExp(`^_context injected: \\d+\\.\\dkB / ${CEILING_KB}kB budget(?: — collapsed: [^_]+)?_$`));
 	});
 
 	test("a tight manifest budget degrades sections and NAMES them in the meter", () => {
@@ -329,7 +332,7 @@ describe("session-start — listing collapse and injection budget", () => {
 				runBig().stdout.split("\n").filter((l) => l.trim() !== "").pop() ?? "";
 			assert.match(
 				last,
-				/^_context injected: \d+\.\dkB \/ 9\.1kB budget \(80\.0kB configured, held under the hook output cap\)(?: — collapsed: [^_]+)?_$/,
+				new RegExp(`^_context injected: \\d+\\.\\dkB / ${CEILING_KB}kB budget \\(80\\.0kB configured, held under the hook output cap\\)(?: — collapsed: [^_]+)?_$`),
 			);
 		} finally {
 			rmSync(manifest, { force: true });

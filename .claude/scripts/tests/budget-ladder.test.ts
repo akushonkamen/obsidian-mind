@@ -362,3 +362,26 @@ describe("the budget measures what goes out inside the JSON envelope (#340)", ()
 		assert.ok(enveloped('a"b\nc') > Buffer.byteLength('a"b\nc', "utf-8"));
 	});
 });
+
+describe("a fitted rung sizes itself as the budget measures it (#340)", () => {
+	// North Star's top-N rung fits its body into the room the budget leaves.
+	// Fitted in raw bytes while the budget measures the encoded text, its body
+	// was always a little over once escaped, so the rung was never taken and
+	// the goals fell to their pointer.
+	test("under the enveloped measure, North Star still degrades to top-N rather than collapsing", () => {
+		const headlines = Array.from({ length: 40 }, (_, i) => `- goal ${i} keep the release pipeline building from tags`);
+		const fixed: BudgetSection = { header: "### Fixed", body: "f".repeat(2_000), priority: 1 };
+		const northStar: BudgetSection = {
+			header: "### North Star (current goals)",
+			body: headlines.join("\n"),
+			priority: 10,
+			fallback: "(pointer)",
+			levels: [{ name: "top-N", fit: (room, measure) => topHeadlines(headlines, room, measure) }],
+		};
+		for (const budget of [2_600, 2_800, 3_000]) {
+			const r = applyInjectionBudget([fixed, northStar], budget, enveloped);
+			assert.deepEqual(r.collapsed, [], `budget ${budget}: collapsed`);
+			assert.deepEqual(r.degraded, [{ section: "North Star (current goals)", level: "top-N" }], `budget ${budget}`);
+		}
+	});
+});
