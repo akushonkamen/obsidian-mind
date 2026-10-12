@@ -67,18 +67,21 @@ export function writeHookOutput(
 	// context gets what the envelope and any policy results leave. Policy
 	// results that cannot fit beside even the cut marker are dropped rather
 	// than carried over the cap (three raw paths can be 12 KB on Linux).
-	const envelope = (context: string, policies: readonly PolicyResult[]) => ({
-		hookSpecificOutput:
-			policies.length > 0
-				? { hookEventName, additionalContext: context, policyResults: policies }
-				: { hookEventName, additionalContext: context },
-	});
-	const overhead = (policies: readonly PolicyResult[]) => JSON.stringify(envelope("", policies)).length - 2;
 	// The smallest context fitEncoded can return is the marker, quotes included.
 	const minimum = JSON.stringify(CUT_MARKER).length;
-	const policies = policyResults && overhead(policyResults) + minimum <= HOOK_OUTPUT_MAX_CHARS ? policyResults : [];
-	process.stdout.write(JSON.stringify(envelope(fitEncoded(additionalContext, HOOK_OUTPUT_MAX_CHARS - overhead(policies)), policies)));
+	const policies = policyResults && envelopeOverhead(hookEventName, policyResults) + minimum <= HOOK_OUTPUT_MAX_CHARS ? policyResults : [];
+	const context = fitEncoded(additionalContext, HOOK_OUTPUT_MAX_CHARS - envelopeOverhead(hookEventName, policies));
+	process.stdout.write(JSON.stringify(envelope(hookEventName, context, policies)));
 }
+
+const envelope = (hookEventName: string, additionalContext: string, policies: readonly PolicyResult[]) => ({
+	hookSpecificOutput:
+		policies.length > 0 ? { hookEventName, additionalContext, policyResults: policies } : { hookEventName, additionalContext },
+});
+
+/** What an envelope adds around its context, without the context's own two quotes. */
+const envelopeOverhead = (hookEventName: string, policies: readonly PolicyResult[] = []): number =>
+	JSON.stringify(envelope(hookEventName, "", policies)).length - 2;
 
 /**
  * Emit a message addressed to the *user* rather than to the model.
@@ -130,10 +133,27 @@ export const HOOK_OUTPUT_LIMIT: OutputLimit = { max: HOOK_OUTPUT_MAX_CHARS, unit
  * (Gemini) gets the whole stdout held under it (#340).
  */
 export function envelopedLimit(hookEventName: string): OutputLimit {
-	const envelope = JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext: "" } }).length;
-	// `"json"` sizes count the encoded string's own two quotes; the envelope
-	// above already counted them once.
-	return { max: HOOK_OUTPUT_MAX_CHARS - envelope + 2, unit: "json", name: HOOK_OUTPUT_LIMIT.name };
+	// `"json"` sizes count the encoded string's own two quotes, which the
+	// overhead leaves out: the same split writeHookOutput fits with.
+	return { max: HOOK_OUTPUT_MAX_CHARS - envelopeOverhead(hookEventName), unit: "json", name: HOOK_OUTPUT_LIMIT.name };
+}
+
+/**
+ * The longest prefix of `text` whose JSON-encoded form, with `suffix` after
+ * it, is at most `max` characters. It never splits an emoji: JSON.stringify
+ * escapes a lone surrogate to six characters, so a cut inside a pair always
+ * costs more than keeping the whole pair, and the search keeps the longest
+ * prefix that fits.
+ */
+function longestEncodedPrefix(text: string, max: number, suffix = ""): string {
+	let lo = 0;
+	let hi = text.length;
+	while (lo < hi) {
+		const mid = Math.ceil((lo + hi) / 2);
+		if (JSON.stringify(text.slice(0, mid) + suffix).length <= max) lo = mid;
+		else hi = mid - 1;
+	}
+	return text.slice(0, lo);
 }
 
 /** The line that replaces whatever a cut to `limit` removed. */
@@ -144,21 +164,11 @@ const CUT_MARKER = `\n${cutLine(HOOK_OUTPUT_LIMIT)}`;
 /**
  * `text`, cut with a marker so that its JSON-encoded form is at most `max`
  * characters. Escaping (`\n`, `\\`, quotes) is counted, which a cut on the
- * raw length would miss. It never splits an emoji: JSON.stringify escapes a
- * lone surrogate to six characters, so a cut inside a pair always costs more
- * than keeping the whole pair, and the search keeps the longest prefix that
- * fits.
+ * raw length would miss, and an emoji is never split (longestEncodedPrefix).
  */
 export function fitEncoded(text: string, max: number): string {
 	if (JSON.stringify(text).length <= max) return text;
-	let lo = 0;
-	let hi = text.length;
-	while (lo < hi) {
-		const mid = Math.ceil((lo + hi) / 2);
-		if (JSON.stringify(text.slice(0, mid) + CUT_MARKER).length <= max) lo = mid;
-		else hi = mid - 1;
-	}
-	return text.slice(0, lo) + CUT_MARKER;
+	return longestEncodedPrefix(text, max, CUT_MARKER) + CUT_MARKER;
 }
 
 /**
@@ -170,14 +180,17 @@ export function fitEncoded(text: string, max: number): string {
  * the body is cut at a line boundary and the meter, built with `cut` set,
  * still closes the output, so a cut is never silent.
  *
- * `meter` gets the UTF-8 size of the body it closes. The cut is sized with
- * the uncut body's meter; the meter is then rebuilt for what was kept, and a
- * smaller size never formats longer, so the rebuilt output still fits.
+ * `meter` gets the size of the body it closes as `measure` sizes it, UTF-8
+ * bytes unless the caller budgeted in another measure: the meter reports the
+ * size its budget decided on. The cut is sized with the uncut body's meter;
+ * the meter is then rebuilt for what was kept, and a smaller size never
+ * formats longer, so the rebuilt output still fits.
  */
 export function fitWithMeter(
 	body: string,
-	meter: (cut: boolean, bodyBytes: number) => string,
+	meter: (cut: boolean, bodySize: number) => string,
 	limit: OutputLimit = HOOK_OUTPUT_LIMIT,
+	measure: (text: string) => number = (text) => Buffer.byteLength(text, "utf-8"),
 ): string {
 	const size = (text: string) =>
 		limit.unit === "bytes" ? Buffer.byteLength(text, "utf-8") : limit.unit === "json" ? JSON.stringify(text).length : text.length;
@@ -185,22 +198,13 @@ export function fitWithMeter(
 	const prefix = (text: string, n: number) => {
 		if (limit.unit === "bytes") return Buffer.from(text, "utf-8").subarray(0, n).toString("utf-8").replace(/\uFFFD+$/, "");
 		if (limit.unit === "chars") return text.slice(0, n).replace(/[\uD800-\uDBFF]$/, "");
-		// json: the longest prefix whose encoded form fits, the same search as
-		// fitEncoded (a lone surrogate encodes longer than the pair it splits).
-		let lo = 0;
-		let hi = text.length;
-		while (lo < hi) {
-			const mid = Math.ceil((lo + hi) / 2);
-			if (JSON.stringify(text.slice(0, mid)).length <= n) lo = mid;
-			else hi = mid - 1;
-		}
-		return text.slice(0, lo).replace(/[\uD800-\uDBFF]$/, "");
+		return longestEncodedPrefix(text, n);
 	};
-	const bodyBytes = Buffer.byteLength(body, "utf-8");
-	const whole = `${body}\n${meter(false, bodyBytes)}\n`;
+	const bodySize = measure(body);
+	const whole = `${body}\n${meter(false, bodySize)}\n`;
 	if (size(whole) <= limit.max) return whole;
 	const marker = cutLine(limit);
-	const room = limit.max - size(`\n${marker}\n\n${meter(true, bodyBytes)}\n`);
+	const room = limit.max - size(`\n${marker}\n\n${meter(true, bodySize)}\n`);
 	// A meter that cannot fit beside any body is itself cut: never in practice
 	// (it is a few hundred characters), but the limit must hold for any input.
 	if (room < 0) return `${prefix(meter(true, 0), Math.max(0, limit.max - 1))}\n`;
@@ -209,7 +213,7 @@ export function fitWithMeter(
 	// No line to cut on: keep the partial line.
 	if (lastBreak >= 0) head = head.slice(0, lastBreak);
 	const kept = `${head}\n${marker}\n`;
-	return `${kept}\n${meter(true, Buffer.byteLength(kept, "utf-8"))}\n`;
+	return `${kept}\n${meter(true, measure(kept))}\n`;
 }
 
 /**

@@ -687,15 +687,17 @@ const budget: InjectionBudget = delivering
 // hookSpecificOutput.additionalContext, and Claude Code accepts the same
 // shape. So the budget and the backstop both measure the encoded text. A
 // mod's deliver run stays plain text: it becomes an instruction file.
-const budgeted = applyInjectionBudget(sections, budget.bytes, delivering ? utf8Bytes : enveloped);
+// One measure decides the budget, the backstop cut and the meter's figure.
+const measure = delivering ? utf8Bytes : enveloped;
+const budgeted = applyInjectionBudget(sections, budget.bytes, measure);
 const limit: OutputLimit = delivering
 	? { max: budget.bytes + METER_HEADROOM, unit: "bytes", name: "the instruction budget" }
 	: envelopedLimit("SessionStart");
 
 const context = fitWithMeter(
 	budgeted.text + "\n",
-	(cut, bodyBytes) =>
-		formatInjectionSize(bodyBytes, {
+	(cut, bodySize) =>
+		formatInjectionSize(bodySize, {
 			budgetBytes: budget.bytes,
 			collapsed: budgeted.collapsed,
 			degraded: budgeted.degraded,
@@ -705,6 +707,7 @@ const context = fitWithMeter(
 			cutTo: limit.name,
 		}),
 	limit,
+	measure,
 );
 if (delivering) process.stdout.write(context);
 else writeHookOutput("SessionStart", context);

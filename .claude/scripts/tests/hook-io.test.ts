@@ -218,6 +218,13 @@ describe("envelopedLimit and fitWithMeter's json unit — a context sent inside 
 		assert.match(context, /_context injected: cut_\n$/, "the cut is in the meter");
 	});
 
+	test("the meter is handed the size in the caller's measure, the one its budget decided on", () => {
+		const seen: number[] = [];
+		const encoded = (t: string) => JSON.stringify(t).length;
+		fitWithMeter('a"b\n', (_cut, size) => (seen.push(size), "_m_"), envelopedLimit("SessionStart"), encoded);
+		assert.deepEqual(seen, [encoded('a"b\n')], "not the UTF-8 bytes");
+	});
+
 	test("the json cut never splits an emoji", () => {
 		const body = "😀".repeat(6_000);
 		const context = fitWithMeter(body, meter, envelopedLimit("SessionStart"));
