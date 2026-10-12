@@ -696,8 +696,9 @@ const limit: OutputLimit = delivering
 
 const context = fitWithMeter(
 	budgeted.text + "\n",
+	// Uncut, the size the budget judged, without the separator line added here.
 	(cut, bodySize) =>
-		formatInjectionSize(bodySize, {
+		formatInjectionSize(cut ? bodySize : budgeted.bytes, {
 			budgetBytes: budget.bytes,
 			collapsed: budgeted.collapsed,
 			degraded: budgeted.degraded,

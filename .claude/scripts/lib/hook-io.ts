@@ -71,10 +71,10 @@ export function writeHookOutput(
 	const minimum = JSON.stringify(CUT_MARKER).length;
 	const policies = policyResults && envelopeOverhead(hookEventName, policyResults) + minimum <= HOOK_OUTPUT_MAX_CHARS ? policyResults : [];
 	const context = fitEncoded(additionalContext, HOOK_OUTPUT_MAX_CHARS - envelopeOverhead(hookEventName, policies));
-	process.stdout.write(JSON.stringify(envelope(hookEventName, context, policies)));
+	process.stdout.write(JSON.stringify(hookEnvelope(hookEventName, context, policies)));
 }
 
-const envelope = (hookEventName: string, additionalContext: string, policies: readonly PolicyResult[]) => ({
+const hookEnvelope = (hookEventName: string, additionalContext: string, policies: readonly PolicyResult[]) => ({
 	hookSpecificOutput:
 		policies.length > 0 ? { hookEventName, additionalContext, policyResults: policies } : { hookEventName, additionalContext },
 });
@@ -101,7 +101,7 @@ export function parseHookContext(stdout: string, hookEventName: string): string 
 
 /** What an envelope adds around its context, without the context's own two quotes. */
 const envelopeOverhead = (hookEventName: string, policies: readonly PolicyResult[] = []): number =>
-	JSON.stringify(envelope(hookEventName, "", policies)).length - 2;
+	JSON.stringify(hookEnvelope(hookEventName, "", policies)).length - 2;
 
 /**
  * Emit a message addressed to the *user* rather than to the model.
@@ -176,6 +176,12 @@ function longestEncodedPrefix(text: string, max: number, suffix = ""): string {
 	return text.slice(0, lo);
 }
 
+/** How a limit in `unit` sizes text. */
+const sizeIn =
+	(unit: OutputLimit["unit"]) =>
+	(text: string): number =>
+		unit === "bytes" ? Buffer.byteLength(text, "utf-8") : unit === "json" ? JSON.stringify(text).length : text.length;
+
 /** The line that replaces whatever a cut to `limit` removed. */
 export const cutLine = (limit: OutputLimit): string => `… (truncated to fit ${limit.name})`;
 
@@ -200,20 +206,19 @@ export function fitEncoded(text: string, max: number): string {
  * the body is cut at a line boundary and the meter, built with `cut` set,
  * still closes the output, so a cut is never silent.
  *
- * `meter` gets the size of the body it closes as `measure` sizes it, UTF-8
- * bytes unless the caller budgeted in another measure: the meter reports the
- * size its budget decided on. The cut is sized with the uncut body's meter;
- * the meter is then rebuilt for what was kept, and a smaller size never
- * formats longer, so the rebuilt output still fits.
+ * `meter` gets the size of the body it closes as `measure` sizes it: the
+ * limit's own unit unless the caller budgeted in another measure, so the
+ * meter reports the size its budget decided on. The cut is sized with the
+ * uncut body's meter; the meter is then rebuilt for what was kept, and a
+ * smaller size never formats longer, so the rebuilt output still fits.
  */
 export function fitWithMeter(
 	body: string,
 	meter: (cut: boolean, bodySize: number) => string,
 	limit: OutputLimit = HOOK_OUTPUT_LIMIT,
-	measure: (text: string) => number = (text) => Buffer.byteLength(text, "utf-8"),
+	measure: (text: string) => number = sizeIn(limit.unit),
 ): string {
-	const size = (text: string) =>
-		limit.unit === "bytes" ? Buffer.byteLength(text, "utf-8") : limit.unit === "json" ? JSON.stringify(text).length : text.length;
+	const size = sizeIn(limit.unit);
 	// The longest prefix of `text` at most `n` units long, never half a character.
 	const prefix = (text: string, n: number) => {
 		if (limit.unit === "bytes") return Buffer.from(text, "utf-8").subarray(0, n).toString("utf-8").replace(/\uFFFD+$/, "");
@@ -227,7 +232,8 @@ export function fitWithMeter(
 	const room = limit.max - size(`\n${marker}\n\n${meter(true, bodySize)}\n`);
 	// A meter that cannot fit beside any body is itself cut: never in practice
 	// (it is a few hundred characters), but the limit must hold for any input.
-	if (room < 0) return `${prefix(meter(true, 0), Math.max(0, limit.max - 1))}\n`;
+	// The closing newline costs what it encodes to: two characters in json.
+	if (room < 0) return `${prefix(meter(true, 0), Math.max(0, limit.max - (size("\n") - size(""))))}\n`;
 	let head = prefix(body, room);
 	const lastBreak = head.lastIndexOf("\n");
 	// No line to cut on: keep the partial line.

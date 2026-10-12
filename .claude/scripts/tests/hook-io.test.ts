@@ -234,15 +234,14 @@ describe("envelopedLimit and fitWithMeter's json unit — a context sent inside 
 
 	test("an output exactly at the limit once encoded passes whole; one character more is cut", () => {
 		const limit = envelopedLimit("SessionStart");
-		const at = (n: number) => '"'.repeat(n);
-		// The whole output is `${body}\n${meter}\n`: solve for the body that lands on max.
-		const frame = JSON.stringify(`\n${meter(false)}\n`).length - 2;
-		const n = (limit.max - 2 - frame) / 2; // each quote encodes to two characters
-		assert.ok(Number.isInteger(n), "the frame leaves an even room");
-		const whole = fitWithMeter(at(n), meter, limit);
+		// The whole output is `${body}\n${meter}\n`: solve for the body that lands
+		// on max, quotes (two encoded characters each) plus one "x" for an odd room.
+		const room = limit.max - 2 - (JSON.stringify(`\n${meter(false)}\n`).length - 2);
+		const body = "x".repeat(room % 2) + '"'.repeat(Math.floor(room / 2));
+		const whole = fitWithMeter(body, meter, limit);
 		assert.equal(JSON.stringify(whole).length, limit.max);
 		assert.match(whole, /_context injected_\n$/, "not cut");
-		assert.match(fitWithMeter(at(n + 1), meter, limit), /_context injected: cut_\n$/);
+		assert.match(fitWithMeter(body + "x", meter, limit), /_context injected: cut_\n$/);
 	});
 
 	test("an emoji straddling the cut after an ASCII prefix is dropped whole, on every alignment", () => {
@@ -253,6 +252,20 @@ describe("envelopedLimit and fitWithMeter's json unit — a context sent inside 
 			assert.doesNotMatch(context, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/, `a lone high surrogate at pad ${pad}`);
 			assert.ok(JSON.stringify(context).length <= limit.max, `pad ${pad}`);
 		}
+	});
+
+	test("a meter too long for the limit on its own is cut to the limit, its newline counted as encoded", () => {
+		for (const max of [10, 11, 20, 21]) {
+			const limit = { max, unit: "json" as const, name: "a tiny limit" };
+			const out = fitWithMeter("body", () => "m".repeat(100), limit);
+			assert.ok(JSON.stringify(out).length <= max, `max ${max}: encoded ${JSON.stringify(out).length}`);
+		}
+	});
+
+	test("without a measure, the meter is sized in the limit's own unit", () => {
+		const seen: number[] = [];
+		fitWithMeter('a"b\n', (_cut, size) => (seen.push(size), "_m_"), envelopedLimit("SessionStart"));
+		assert.deepEqual(seen, [JSON.stringify('a"b\n').length]);
 	});
 
 	test("CRLF bodies are measured as encoded, carriage returns included", () => {

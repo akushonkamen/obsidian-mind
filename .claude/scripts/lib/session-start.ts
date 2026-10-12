@@ -282,6 +282,11 @@ export const utf8Bytes = (text: string): number => Buffer.byteLength(text, "utf-
  * or its JSON-encoded length, whichever is larger. Escaping (`\n`, quotes)
  * grows ASCII text; multi-byte text is still held to its bytes, so no vault
  * is measured more loosely than as plain stdout.
+ *
+ * On the hook path the budget, the ceiling, `BudgetResult.bytes` and the
+ * meter's kB are in this unit while keeping their byte names: the setting
+ * they answer to is `eager_layer_budget_bytes`, and this size is never below
+ * the byte count, so a figure read as bytes never understates.
  */
 export const enveloped = (text: string): number => Math.max(utf8Bytes(text), JSON.stringify(text).length);
 

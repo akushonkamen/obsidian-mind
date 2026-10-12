@@ -1256,7 +1256,8 @@ describe("the injection budget under the hook output cap (#254)", () => {
 		// The hook path sends the context inside an envelope, which takes its
 		// share of the cap: the ceiling must come from what the envelope leaves.
 		assert.equal(INJECTION_CEILING_BYTES, envelopedLimit("SessionStart").max - METER_HEADROOM);
-		assert.ok(INJECTION_CEILING_BYTES < 9_100);
+		// A ratchet on the value itself, so a wrong formula cannot pass by agreeing with itself.
+		assert.equal(INJECTION_CEILING_BYTES, 9_024);
 	});
 
 	test("the template's own manifest budget is under the ceiling: a fresh vault's meter never reports a clamp", () => {
@@ -1347,7 +1348,8 @@ describe("fitWithMeter", () => {
 		const body = "x\n".repeat(1_000);
 		const out = fitWithMeter(body, meter, chars(300));
 		const kept = out.slice(0, out.lastIndexOf("\n\n_meter") + 1);
-		assert.match(out, new RegExp(`_meter ${Buffer.byteLength(kept, "utf-8")} cut_\n$`));
+		// In the limit's own unit: characters here, so the marker's "…" counts once.
+		assert.match(out, new RegExp(`_meter ${kept.length} cut_\n$`));
 	});
 
 	test("a byte limit is measured in UTF-8 bytes, cuts on a line, and never splits a character", () => {
