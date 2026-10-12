@@ -123,7 +123,7 @@ describe("session-start — the hook path prints one JSON envelope (#340)", () =
 	test("deliver stays plain text: the mod writes it into an instruction file", () => {
 		const { stdout, code } = spawnHook(SCRIPT, { source: "startup", om_mod: "deliver" }, { CLAUDE_PROJECT_DIR: TMP_DIR });
 		assert.equal(code, 0);
-		assert.ok(stdout.startsWith("## ") || stdout.startsWith("#"), "plain Markdown, not JSON");
+		assert.ok(stdout.startsWith("## Session Context"), "plain Markdown, not JSON");
 		assert.throws(() => JSON.parse(stdout));
 	});
 });

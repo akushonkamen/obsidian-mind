@@ -79,6 +79,26 @@ const envelope = (hookEventName: string, additionalContext: string, policies: re
 		policies.length > 0 ? { hookEventName, additionalContext, policyResults: policies } : { hookEventName, additionalContext },
 });
 
+/**
+ * The context a writeHookOutput envelope for `hookEventName` carries: what
+ * reaches the model. Throws, naming what it got, on stdout that is not one
+ * JSON object or not that event's envelope; for the tests and the delivery
+ * gate, which read the hook path as the agent does.
+ */
+export function parseHookContext(stdout: string, hookEventName: string): string {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stdout);
+	} catch {
+		throw new Error(`hook stdout is not one JSON object: ${JSON.stringify(stdout.slice(0, 120))}`);
+	}
+	const out = (parsed as { hookSpecificOutput?: { hookEventName?: unknown; additionalContext?: unknown } } | null)?.hookSpecificOutput;
+	if (out?.hookEventName !== hookEventName || typeof out.additionalContext !== "string") {
+		throw new Error(`not a ${hookEventName} envelope: ${JSON.stringify(stdout.slice(0, 120))}`);
+	}
+	return out.additionalContext;
+}
+
 /** What an envelope adds around its context, without the context's own two quotes. */
 const envelopeOverhead = (hookEventName: string, policies: readonly PolicyResult[] = []): number =>
 	JSON.stringify(envelope(hookEventName, "", policies)).length - 2;

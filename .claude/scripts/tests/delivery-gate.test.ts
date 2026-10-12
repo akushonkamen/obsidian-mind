@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
 	buildFixture,
 	contextOf,
+	flagConflict,
 	removeFixture,
 	countResults,
 	carries,
@@ -413,6 +414,12 @@ describe("delivery gate: self-test and environment", () => {
 		{ breakage: "cut" as const, verdicts: [v("at startup", "FAIL"), v("after /compact", "FAIL")] },
 		{ breakage: "startup-only" as const, verdicts: [v("at startup", startupOutcome), v("after /compact", "FAIL")] },
 	];
+
+	test("--self-test with --hooks-only is refused: the self-test breaks the mod, which --hooks-only never runs", () => {
+		assert.match(flagConflict(["--self-test", "--hooks-only"]) ?? "", /--self-test.*--hooks-only/);
+		assert.equal(flagConflict(["--hooks-only"]), null);
+		assert.equal(flagConflict(["--self-test"]), null);
+	});
 
 	test("the self-test passes only when every checkpoint fails and the startup-only control passes", () => {
 		assert.equal(selfTestOutcome(broken("PASS")).exitCode, 0);

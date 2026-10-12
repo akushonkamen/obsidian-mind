@@ -7,7 +7,7 @@
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { debug, envelopedLimit, fitEncoded, fitWithMeter, HOOK_OUTPUT_MAX_CHARS, warn, writeHookOutput, writeStopFeedback, writeSystemMessage, type PolicyResult } from "../lib/hook-io.ts";
+import { debug, envelopedLimit, fitEncoded, fitWithMeter, HOOK_OUTPUT_MAX_CHARS, parseHookContext, warn, writeHookOutput, writeStopFeedback, writeSystemMessage, type PolicyResult } from "../lib/hook-io.ts";
 
 /**
  * Replace process.stderr.write with a capturer that records calls and returns
@@ -275,5 +275,24 @@ describe("writeStopReportData on a pipe that writes in parts", () => {
 			throw Object.assign(new Error("closed"), { code: "EPIPE" });
 		};
 		assert.throws(() => writeStopReportData({ key: "k", claims: [], agentText: "t" }, write), /closed/);
+	});
+});
+
+describe("parseHookContext — the context a hook-path envelope carries (#340)", () => {
+	test("returns additionalContext from an envelope for the named event", () => {
+		const stdout = JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "## Session Context\n" } });
+		assert.equal(parseHookContext(stdout, "SessionStart"), "## Session Context\n");
+	});
+
+	test("plain text is refused by name, not with a bare JSON SyntaxError", () => {
+		assert.throws(() => parseHookContext("## Session Context\n", "SessionStart"), /not one JSON object/);
+	});
+
+	test("an envelope for another event, or with no string context, is refused", () => {
+		const stop = JSON.stringify({ hookSpecificOutput: { hookEventName: "Stop", additionalContext: "x" } });
+		assert.throws(() => parseHookContext(stop, "SessionStart"), /not a SessionStart envelope/);
+		const empty = JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart" } });
+		assert.throws(() => parseHookContext(empty, "SessionStart"), /not a SessionStart envelope/);
+		assert.throws(() => parseHookContext("null", "SessionStart"), /not a SessionStart envelope/);
 	});
 });
