@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import {
 	applyInjectionBudget,
+	enveloped,
 	formatInjectionSize,
 	goalHeadline,
 	northStarLadder,
@@ -340,5 +341,24 @@ describe("North Star full level — no silent cut", () => {
 			formatInjectionSize(2_000, { budgetBytes: 9_100, cutSections: [{ section: "Open Tasks", note: "10 of 14" }] }),
 			"_context injected: 2.0kB / 9.1kB budget — cut: Open Tasks (10 of 14)_",
 		);
+	});
+});
+
+describe("the budget measures what goes out inside the JSON envelope (#340)", () => {
+	// Quotes and newlines escape to two characters each, so a section that fits
+	// a budget in bytes can be over it once encoded. Measured enveloped, the
+	// budget lets it fall back to its pointer instead of leaving the backstop
+	// to truncate the output mid-section.
+	const quoted: BudgetSection = { header: "### Quoted", body: '"'.repeat(5_000), priority: 10, fallback: "(pointer)" };
+
+	test("measured in bytes it fits whole; measured enveloped it falls back", () => {
+		assert.deepEqual(applyInjectionBudget([quoted], 6_000).collapsed, []);
+		assert.deepEqual(applyInjectionBudget([quoted], 6_000, enveloped).collapsed, ["Quoted"]);
+	});
+
+	test("enveloped never measures smaller than bytes, so multi-byte text is held as tightly as before", () => {
+		const cjk = "界".repeat(1_000);
+		assert.equal(enveloped(cjk), Buffer.byteLength(cjk, "utf-8"));
+		assert.ok(enveloped('a"b\nc') > Buffer.byteLength('a"b\nc', "utf-8"));
 	});
 });
