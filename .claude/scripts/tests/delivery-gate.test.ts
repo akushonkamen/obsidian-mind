@@ -11,6 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	buildFixture,
+	contextOf,
+	removeFixture,
 	countResults,
 	carries,
 	expectationTracker,
@@ -468,6 +470,18 @@ describe("delivery gate: self-test and environment", () => {
 			assert.equal(readFileSync(join(foreign, "notes.md"), "utf8"), "mine", "nothing of the owner's is touched");
 		} finally {
 			rmSync(foreign, { recursive: true, force: true });
+		}
+	});
+
+	test("contextOf reads the hook path's context out of its JSON envelope, and deliver as plain text (#340)", () => {
+		const vault = buildFixture("none", { withMod: false, notes: 0 });
+		try {
+			const hooked = contextOf(vault, false);
+			assert.match(lastLine(hooked), /^_context injected: /, "the expectation is the meter, not the envelope's closing brace");
+			assert.ok(!hooked.trimStart().startsWith("{"), "not the raw JSON");
+			assert.match(lastLine(contextOf(vault, true)), /^_context injected: /);
+		} finally {
+			removeFixture(vault);
 		}
 	});
 

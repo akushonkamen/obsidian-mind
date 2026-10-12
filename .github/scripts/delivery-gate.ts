@@ -50,6 +50,9 @@
  *
  * `--file-issue` opens a GitHub issue (with `gh`) when a checkpoint fails.
  *
+ * `--hooks-only` runs only the sessions without the mod (the settings hooks
+ * alone), for a change that touches the hook path and not the mod's (#340).
+ *
  * `--self-test` runs two broken copies of the mod instead: one cuts its
  * context to 2,000 characters everywhere, one delivers it whole only at
  * startup. Every checkpoint must FAIL, except the startup-only copy's own
@@ -612,7 +615,13 @@ export function contextOf(vault: string, deliver: boolean, source: "startup" | "
 		},
 	);
 	if (run.status !== 0) throw new Error(`session-start.ts failed: ${run.stderr}`);
-	return run.stdout;
+	if (deliver) return run.stdout;
+	// The hook path prints one JSON envelope (#340): the context is its
+	// additionalContext, which is what reaches the model.
+	const parsed = JSON.parse(run.stdout) as { hookSpecificOutput?: { additionalContext?: unknown } };
+	const context = parsed.hookSpecificOutput?.additionalContext;
+	if (typeof context !== "string") throw new Error(`session-start.ts printed no SessionStart envelope: ${run.stdout.slice(0, 200)}`);
+	return context;
 }
 
 /** What a context makes a checkpoint expect: its last line, and the marker if the context carries it. */
@@ -839,6 +848,7 @@ async function main(): Promise<void> {
 		return i >= 0 && argv[i + 1] ? argv[i + 1] : undefined;
 	};
 	const selfTest = argv.includes("--self-test");
+	const hooksOnly = argv.includes("--hooks-only");
 	const trustedDir = flag("--trusted-dir");
 	const base = { claude: flag("--claude") ?? "claude", model: flag("--model") ?? "opus", ...(trustedDir ? { trustedDir: resolve(trustedDir) } : {}) };
 	const version = spawnSync(base.claude, ["--version"], { encoding: "utf8" }).stdout?.trim() || "unknown version";
@@ -847,7 +857,7 @@ async function main(): Promise<void> {
 		process.exit(130);
 	});
 	const loading = trustedDir ? `found in the trusted folder ${resolve(trustedDir)}` : "loaded with --plugin-dir";
-	console.log(`Delivery gate · ${version} · ${base.model} · the mod ${loading}${selfTest ? " · SELF-TEST" : ""}\n`);
+	console.log(`Delivery gate · ${version} · ${base.model} · ${hooksOnly ? "settings hooks only" : `the mod ${loading}`}${selfTest ? " · SELF-TEST" : ""}\n`);
 
 	if (selfTest) {
 		const runs: Array<{ breakage: Breakage; verdicts: Verdict[] }> = [];
@@ -864,7 +874,7 @@ async function main(): Promise<void> {
 	}
 
 	const verdicts: Verdict[] = [];
-	for (const steps of plan(true)) verdicts.push(...(await runSession(steps, "none", { ...base, withMod: true })));
+	if (!hooksOnly) for (const steps of plan(true)) verdicts.push(...(await runSession(steps, "none", { ...base, withMod: true })));
 	for (const steps of plan(false)) verdicts.push(...(await runSession(steps, "none", { ...base, withMod: false })));
 	print("", verdicts);
 	const invalid = verdicts.filter((v) => v.outcome === "INVALID").length;
