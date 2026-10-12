@@ -108,7 +108,8 @@ describe("session-start — no detached qmd refresh under the switch (#337)", ()
 
 describe("session-start — the hook path prints one JSON envelope (#340)", () => {
 	// Gemini parses a hook's stdout as JSON and takes context only from
-	// hookSpecificOutput.additionalContext; Claude Code accepts the same shape.
+	// hookSpecificOutput.additionalContext (per its hooks reference as of
+	// 2026-10-13, not observed); Claude Code accepts the same shape.
 	test("stdout is exactly one SessionStart envelope, whose additionalContext carries the context and the meter", () => {
 		const { raw, code } = runHook();
 		assert.equal(code, 0);
@@ -118,6 +119,17 @@ describe("session-start — the hook path prints one JSON envelope (#340)", () =
 		const context = parsed.hookSpecificOutput?.additionalContext ?? "";
 		assert.ok(context.includes("### Date"), "the context is inside the envelope");
 		assert.match(lastLine(context), /^_context injected: /, "the meter closes the context");
+	});
+
+	test("an empty folder, no vault files at all, still gets one well-formed envelope", () => {
+		const dir = mkdtempSync(join(tmpdir(), "session-start-empty-"));
+		try {
+			const { stdout, code } = hookPath({ source: "startup" }, { CLAUDE_PROJECT_DIR: dir });
+			assert.equal(code, 0);
+			assert.match(lastLine(stdout), /^_context injected: /);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	test("deliver stays plain text: the mod writes it into an instruction file", () => {

@@ -684,10 +684,10 @@ const budget: InjectionBudget = delivering
 	: effectiveInjectionBudget(parseInjectionBudget(manifestJson));
 // On the hook path the context goes out inside a JSON envelope (#340): Gemini
 // parses a hook's stdout as JSON and reads context only from
-// hookSpecificOutput.additionalContext, and Claude Code accepts the same
-// shape. So the budget and the backstop both measure the encoded text. A
-// mod's deliver run stays plain text: it becomes an instruction file.
-// One measure decides the budget, the backstop cut and the meter's figure.
+// hookSpecificOutput.additionalContext (per its hooks reference as of
+// 2026-10-13, not observed), and Claude Code accepts the same shape. So the
+// budget, the backstop cut and the meter's figure all use the encoded size.
+// A mod's deliver run stays plain text: it becomes an instruction file.
 const measure = delivering ? utf8Bytes : enveloped;
 const budgeted = applyInjectionBudget(sections, budget.bytes, measure);
 const limit: OutputLimit = delivering

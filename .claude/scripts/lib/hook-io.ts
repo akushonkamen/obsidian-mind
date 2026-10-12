@@ -150,7 +150,7 @@ export const HOOK_OUTPUT_LIMIT: OutputLimit = { max: HOOK_OUTPUT_MAX_CHARS, unit
  * (writeHookOutput), measured on its JSON-encoded form: what is left of the
  * hook output cap once the envelope itself is counted. Claude Code caps the
  * `additionalContext` string alone, but an agent whose cap is undocumented
- * (Gemini) gets the whole stdout held under it (#340).
+ * (Gemini, as of 2026-10-13) gets the whole stdout held under it (#340).
  */
 export function envelopedLimit(hookEventName: string): OutputLimit {
 	// `"json"` sizes count the encoded string's own two quotes, which the

@@ -1259,6 +1259,11 @@ describe("the injection budget under the hook output cap (#254)", () => {
 		assert.ok(INJECTION_CEILING_BYTES < 9_100);
 	});
 
+	test("the template's own manifest budget is under the ceiling: a fresh vault's meter never reports a clamp", () => {
+		const manifest = readFileSync(new URL("../../../vault-manifest.json", import.meta.url), "utf-8");
+		assert.equal(effectiveInjectionBudget(parseInjectionBudget(manifest)).clampedFrom, undefined);
+	});
+
 	const C = INJECTION_CEILING_BYTES;
 
 	const cases: ReadonlyArray<readonly [number | null, number, number | undefined]> = [

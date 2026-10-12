@@ -232,6 +232,29 @@ describe("envelopedLimit and fitWithMeter's json unit — a context sent inside 
 		assert.ok(JSON.stringify(context).length <= envelopedLimit("SessionStart").max);
 	});
 
+	test("an output exactly at the limit once encoded passes whole; one character more is cut", () => {
+		const limit = envelopedLimit("SessionStart");
+		const at = (n: number) => '"'.repeat(n);
+		// The whole output is `${body}\n${meter}\n`: solve for the body that lands on max.
+		const frame = JSON.stringify(`\n${meter(false)}\n`).length - 2;
+		const n = (limit.max - 2 - frame) / 2; // each quote encodes to two characters
+		assert.ok(Number.isInteger(n), "the frame leaves an even room");
+		const whole = fitWithMeter(at(n), meter, limit);
+		assert.equal(JSON.stringify(whole).length, limit.max);
+		assert.match(whole, /_context injected_\n$/, "not cut");
+		assert.match(fitWithMeter(at(n + 1), meter, limit), /_context injected: cut_\n$/);
+	});
+
+	test("an emoji straddling the cut after an ASCII prefix is dropped whole, on every alignment", () => {
+		const limit = envelopedLimit("SessionStart");
+		for (let pad = 0; pad < 4; pad++) {
+			const body = "x".repeat(limit.max - 500 + pad) + "😀".repeat(400);
+			const context = fitWithMeter(body, meter, limit);
+			assert.doesNotMatch(context, /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/, `a lone high surrogate at pad ${pad}`);
+			assert.ok(JSON.stringify(context).length <= limit.max, `pad ${pad}`);
+		}
+	});
+
 	test("CRLF bodies are measured as encoded, carriage returns included", () => {
 		const body = "line\r\n".repeat(3_000);
 		const context = fitWithMeter(body, meter, envelopedLimit("SessionStart"));
