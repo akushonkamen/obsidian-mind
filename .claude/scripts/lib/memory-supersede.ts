@@ -126,12 +126,18 @@ export function markSuperseded(vaultRoot: string, rel: string, supersedingTitle:
 			return result.changed ? result.text : null;
 		});
 		if (outcome === "contended") {
-			return { ok: false, reason: `could not mark ${rel} superseded: file kept changing under concurrent writers` };
+			return {
+				ok: false,
+				reason: `could not mark ${rel} superseded: contended, it kept changing or another writer held it`,
+			};
 		}
 		return { ok: true, changed: outcome === "written", reason };
 	} catch (err) {
 		if (err instanceof SupersedeRefused) return { ok: false, reason: err.message };
-		return { ok: false, reason: `cannot read ${rel}` };
+		// The read and the rename both land here, so name which failure it was.
+		// The code, not the message: the message carries the vault's absolute path.
+		const code = (err as NodeJS.ErrnoException).code ?? (err as Error).name;
+		return { ok: false, reason: `cannot read or rewrite ${rel}: ${code}` };
 	}
 }
 

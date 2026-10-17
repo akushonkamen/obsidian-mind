@@ -1,20 +1,18 @@
 /**
  * markSuperseded under real concurrency: several PROCESSES marking the same
- * memory at the same time, every title must land.
+ * memory at the same instant, every title must land.
  *
  * This is the shape the deployment names — one server process per consuming
- * repo, all writing into one vault — and the shape the unguarded
- * read-modify-write lost 90 of 200 titles in (#328). A single-process test
- * cannot stand a writer in the gap between markSuperseded's read and its
- * rename, so the writers are child processes synchronised on a go file.
+ * repo, all writing into one vault — and the protocol #328 measured: each
+ * round, every writer makes ONE call on the same memory with its own title,
+ * and afterwards every title must be in the file. The unguarded
+ * read-modify-write lost titles while reporting success: 50 of 50 rounds in
+ * #328's harness, and some round in every run of this one on Windows.
  *
- * Each writer retries (bounded) until its title is really on disk — the
- * contract the guarded rewrite offers: failures are reported, not lied about,
- * and a caller that retries does not lose titles. The assertion is the one
- * that matters: every minted title is present in the file at the end. Before
- * the guarded rewrite this failed in every round; the unit tests in
- * atomic-write.test.ts pin the mechanism (re-read before replace, replay on
- * fresh content, bounded attempts) deterministically.
+ * No writer retries and nothing is repaired before the assertion, so a lost
+ * update fails the round it happened in. A single-process test cannot stand a
+ * writer in the gap between markSuperseded's read and its rename, so the
+ * writers are child processes started together from a go file per round.
  */
 
 import { test, describe } from "node:test";
@@ -27,76 +25,72 @@ import { fileURLToPath } from "node:url";
 
 import { rmTemp, waitFor } from "./_helpers.ts";
 
-import { markSuperseded } from "../lib/memory-supersede.ts";
+import { writeFileAtomic } from "../lib/atomic-write.ts";
+import type { SupersedeResult } from "../lib/memory-supersede.ts";
 
 const PROCS = 4;
-const FRESH_TITLES = 25; // must match _race-child.ts
+const ROUNDS = 50;
+// Long enough for every spinning writer to have read the go file before it fires.
+const START_DELAY_MS = 30;
+
+const MEMORY = "---\ndate: 2026-07-26\nsource: mcp-capture\nscope: general\n---\n\n# old\n\nbody\n";
 
 describe("markSuperseded race", () => {
-	test("concurrent writers all land their superseded_by title", async () => {
+	test("writers marking one memory at the same instant all land their title", { timeout: 120_000 }, async () => {
 		const dir = mkdtempSync(join(tmpdir(), "sup-race-"));
+		const vault = join(dir, "vault");
+		const sync = join(dir, "sync");
+		mkdirSync(sync, { recursive: true });
+		const kids: ReturnType<typeof spawn>[] = [];
 		try {
-			const rel = "memories/2026/07/2026-07-26 old.md";
-			const full = join(dir, rel);
-			mkdirSync(dirname(full), { recursive: true });
-			writeFileSync(
-				full,
-				"---\ndate: 2026-07-26\nsource: mcp-capture\nscope: general\n---\n\n# old\n\nbody\n",
-				"utf8",
-			);
-			const childPath = fileURLToPath(new URL("./_race-child.ts", import.meta.url));
-
-			const goFile = join(dir, "go");
-			const kids = Array.from({ length: PROCS }, (_, p) => {
-				const doneFile = join(dir, `done-${p}.json`);
-				const proc = spawn(
-					process.execPath,
-					["--experimental-strip-types", childPath, dir, rel, String(p), goFile, doneFile],
-					{ stdio: ["ignore", "ignore", "pipe"] },
-				);
-				return { proc, doneFile };
+			const rounds = Array.from({ length: ROUNDS }, (_, r) => {
+				const rel = `memories/2026/07/2026-07-26 race ${r}.md`;
+				mkdirSync(dirname(join(vault, rel)), { recursive: true });
+				writeFileSync(join(vault, rel), MEMORY, "utf8");
+				return { rel, titles: Array.from({ length: PROCS }, (_, p) => `Writer ${p} round ${r}`) };
 			});
 
-			// Only once every child is waiting on it: the start must be simultaneous.
-			writeFileSync(goFile, "1");
-			const exits = await Promise.all(
-				kids.map((k) => new Promise<number>((res) => k.proc.on("exit", (c) => res(c ?? -1)))),
-			);
-			exits.forEach((code, i) => assert.equal(code, 0, `writer ${i} crashed`));
+			const childPath = fileURLToPath(new URL("./_race-child.ts", import.meta.url));
+			const exits = Array.from({ length: PROCS }, (_, p) => {
+				const proc = spawn(
+					process.execPath,
+					["--experimental-strip-types", childPath, vault, sync, String(p), String(ROUNDS)],
+					{ stdio: ["ignore", "ignore", "inherit"] },
+				);
+				kids.push(proc);
+				return new Promise<number>((res) => proc.on("exit", (c) => res(c ?? -1)));
+			});
+			const done = (p: number, r: number) => join(sync, `done-${p}-${r}`);
 
-			await waitFor(() => kids.every((k) => existsSync(k.doneFile)));
-			const silent = kids.filter((k) => !existsSync(k.doneFile));
-			assert.deepEqual(
-				silent.map((_, i) => i),
-				[],
-				"every writer must report back",
-			);
+			// Only once every writer is loaded and spinning: the start must be simultaneous.
+			await waitFor(() => kids.every((_, p) => existsSync(join(sync, `ready-${p}`))), 30_000);
 
-			const reports = kids.map(
-				(k) => JSON.parse(readFileSync(k.doneFile, "utf8")) as { landed: string[]; stuck: string[] },
-			);
-			const landed = reports.flatMap((r) => r.landed);
-			assert.equal(landed.length, PROCS * FRESH_TITLES, "every minted title must land");
-			const stuck = reports.flatMap((r) => r.stuck);
-			assert.deepEqual(stuck, [], "no title may exhaust its retries");
+			const lost: { round: number; title: string; outcome: string }[] = [];
+			for (const [r, round] of rounds.entries()) {
+				const startAt = Date.now() + START_DELAY_MS;
+				// Atomic: a writer spinning on the go file must never read it half-written.
+				writeFileAtomic(join(sync, `go-${r}`), JSON.stringify({ ...round, startAt }));
+				await waitFor(() => kids.every((_, p) => existsSync(done(p, r))), 30_000);
 
-			// Convergence: once the writers are done, any title a retrying caller
-			// still finds missing lands on the next call. This is the guarantee the
-			// guarded rewrite can make without a lock file — failures are reported,
-			// retries succeed, nothing is silently gone — and it is the property the
-			// deployment actually relies on.
-			const allTitles: string[] = [];
-			for (let p = 0; p < PROCS; p++)
-				for (let n = 0; n < FRESH_TITLES; n++) allTitles.push(`Concurrent writer ${p}-${n}`);
-			const listNow = () => readFileSync(full, "utf8").match(/superseded_by: \[(.*)\]/)?.[1] ?? "";
-			for (const title of allTitles) {
-				if (listNow().includes(JSON.stringify(title))) continue;
-				const r = markSuperseded(dir, rel, title);
-				assert.equal(r.ok, true, `repair of ${title} must succeed once writers are done`);
+				const text = readFileSync(join(vault, round.rel), "utf8");
+				for (const [p, title] of round.titles.entries()) {
+					if (text.includes(JSON.stringify(title))) continue;
+					// Say how it went missing: silently is #328, loudly is a refusal to explain.
+					const result = JSON.parse(readFileSync(done(p, r), "utf8")) as SupersedeResult;
+					lost.push({ round: r, title, outcome: result.ok ? "reported success" : result.reason });
+				}
 			}
-			const missing = allTitles.filter((title) => !listNow().includes(JSON.stringify(title)));
-			assert.deepEqual(missing, [], "after retries and repair, no title may be lost");
+
+			(await Promise.all(exits)).forEach((code, p) => assert.equal(code, 0, `writer ${p} crashed`));
+			const lostRounds = new Set(lost.map((l) => l.round)).size;
+			assert.deepEqual(
+				lost,
+				[],
+				`${lost.length} of ${PROCS * ROUNDS} titles lost, in ${lostRounds} of ${ROUNDS} rounds: ` +
+					lost.map((l) => `${l.title} (${l.outcome})`).join("; "),
+			);
 		} finally {
+			for (const k of kids) k.kill();
 			rmTemp(dir);
 		}
 	});

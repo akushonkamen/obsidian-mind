@@ -1,10 +1,11 @@
 /**
  * lib/atomic-write.ts writeFileAtomic: replace a file whole, or leave nothing behind.
+ * rewriteIfUnchanged: edit an existing file without losing another writer's edit.
  */
 
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileAtomic, rewriteIfUnchanged } from "../lib/atomic-write.ts";
@@ -99,5 +100,37 @@ describe("rewriteIfUnchanged", () => {
 		assert.equal(calls, 3, "gave up after the bounded attempts");
 		assert.ok(!readFileSync(path, "utf8").includes("mine"), "nothing of ours was written");
 		assert.deepEqual(readdirSync(dir), ["note.md"], "no temp file left behind");
+	});
+	test("a writer holding the lock makes the next one report contended, the lock left alone", () => {
+		writeFileSync(path, "v1", "utf8");
+		writeFileSync(`${path}.lock`, "", "utf8");
+		let calls = 0;
+		const outcome = rewriteIfUnchanged(
+			path,
+			(current) => {
+				calls++;
+				return current + "mine";
+			},
+			3,
+			50,
+		);
+		assert.equal(outcome, "contended");
+		assert.equal(calls, 0, "nothing is read for an edit before the lock is held");
+		assert.equal(readFileSync(path, "utf8"), "v1");
+		assert.deepEqual(
+			readdirSync(dir).sort(),
+			["note.md", "note.md.lock"],
+			"another writer's lock is not ours to remove",
+		);
+	});
+
+	test("a lock left by a dead writer is taken over", () => {
+		writeFileSync(path, "v1", "utf8");
+		writeFileSync(`${path}.lock`, "", "utf8");
+		const longAgo = new Date(Date.now() - 60_000);
+		utimesSync(`${path}.lock`, longAgo, longAgo);
+		assert.equal(rewriteIfUnchanged(path, (current) => current + "v2", 3, 50), "written");
+		assert.equal(readFileSync(path, "utf8"), "v1v2");
+		assert.deepEqual(readdirSync(dir), ["note.md"], "the stale lock is gone, and ours released");
 	});
 });
